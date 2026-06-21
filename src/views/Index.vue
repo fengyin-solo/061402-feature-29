@@ -4,7 +4,11 @@
       <h1>🏝️ 海岛生存</h1>
       <p>在荒岛上建立你的生存基地</p>
     </div>
-    
+
+    <div class="task-clock-section">
+      <TaskClock />
+    </div>
+
     <div class="island-main">
       <div class="stats-panel">
         <div class="stat-card">
@@ -44,46 +48,42 @@
         <h3>📋 可执行操作</h3>
         
         <div class="action-grid">
-          <div class="action-card" @click="gatherFood">
-            <div class="action-icon">🍓</div>
-            <div class="action-title">采集食物</div>
-            <div class="action-desc">在岛上寻找可食用的果实和动物</div>
-            <div class="action-time">耗时: 30秒</div>
-          </div>
-          
-          <div class="action-card" @click="collectWater">
-            <div class="action-icon">💧</div>
-            <div class="action-title">收集淡水</div>
-            <div class="action-desc">收集雨水或净化海水</div>
-            <div class="action-time">耗时: 1分钟</div>
-          </div>
-          
-          <div class="action-card" @click="chopWood">
-            <div class="action-icon">🪓</div>
-            <div class="action-title">砍伐木材</div>
-            <div class="action-desc">砍伐树木获取木材资源</div>
-            <div class="action-time">耗时: 2分钟</div>
-          </div>
-          
-          <div class="action-card" @click="mineStone">
-            <div class="action-icon">⛏️</div>
-            <div class="action-title">挖掘石头</div>
-            <div class="action-desc">在岛上挖掘石头资源</div>
-            <div class="action-time">耗时: 3分钟</div>
-          </div>
-          
-          <div class="action-card" @click="buildShelter">
-            <div class="action-icon">🏠</div>
-            <div class="action-title">建造庇护所</div>
-            <div class="action-desc">建造一个安全的住所</div>
-            <div class="action-cost">需要: 50木材, 30石头</div>
-          </div>
-          
-          <div class="action-card" @click="craftTools">
-            <div class="action-icon">🔨</div>
-            <div class="action-title">制作工具</div>
-            <div class="action-desc">制作更高效的生存工具</div>
-            <div class="action-cost">需要: 20木材, 10石头</div>
+          <div
+            v-for="action in actionConfigs"
+            :key="action.name"
+            class="action-card"
+            :class="{
+              'action-disabled': !getActionStatus(action).canPerform,
+              'action-conflict': getActionStatus(action).hasConflict,
+              'action-running': isActionRunning(action.name),
+              'action-queued': isActionQueued(action.name)
+            }"
+            @click="performAction(action)"
+          >
+            <div class="action-icon">{{ action.icon }}</div>
+            <div class="action-title">
+              {{ action.name }}
+              <el-tag v-if="isActionRunning(action.name)" type="primary" size="small" effect="dark">执行中</el-tag>
+              <el-tag v-else-if="isActionQueued(action.name)" type="warning" size="small">排队中 #{{ getQueuePosition(action.name) }}</el-tag>
+            </div>
+            <div class="action-desc">{{ action.description }}</div>
+            <div class="action-time">
+              <i class="el-icon-clock" /> 耗时: {{ formatDuration(action.duration) }}
+            </div>
+            <div v-if="Object.keys(action.cost).length > 0" class="action-cost">
+              <i class="el-icon-remove" /> 需要: {{ formatResources(action.cost) }}
+            </div>
+            <div v-if="Object.keys(action.gain).length > 0" class="action-gain">
+              <i class="el-icon-plus" /> 获得: {{ formatResources(action.gain) }}
+            </div>
+            <div v-if="action.conflicts.length > 0" class="action-conflict-info">
+              <i class="el-icon-warning" /> 冲突: {{ action.conflicts.join('、') }}
+            </div>
+            <div v-if="!getActionStatus(action).canPerform" class="action-status-badge">
+              <el-tag size="small" :type="getActionStatus(action).hasConflict ? 'danger' : 'info'">
+                {{ getActionStatus(action).reason }}
+              </el-tag>
+            </div>
           </div>
         </div>
       </div>
@@ -133,8 +133,12 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { useTaskStore } from '../store';
+import TaskClock from '../layouts/components/TaskClock.vue';
+
+const taskStore = useTaskStore();
 
 const resources = ref({
   food: 100,
@@ -159,70 +163,138 @@ const mapGrid = ref([
   { type: 'forest', icon: '🌳', explored: false }
 ]);
 
+const actionConfigs = [
+  {
+    name: '采集食物',
+    icon: '🍓',
+    description: '在岛上寻找可食用的果实和动物',
+    duration: 30000,
+    cost: {},
+    gain: { food: 20 },
+    conflicts: ['砍伐木材', '挖掘石头']
+  },
+  {
+    name: '收集淡水',
+    icon: '💧',
+    description: '收集雨水或净化海水',
+    duration: 60000,
+    cost: {},
+    gain: { water: 30 },
+    conflicts: ['砍伐木材', '挖掘石头']
+  },
+  {
+    name: '砍伐木材',
+    icon: '🪓',
+    description: '砍伐树木获取木材资源',
+    duration: 120000,
+    cost: {},
+    gain: { wood: 15 },
+    conflicts: ['采集食物', '收集淡水', '挖掘石头']
+  },
+  {
+    name: '挖掘石头',
+    icon: '⛏️',
+    description: '在岛上挖掘石头资源',
+    duration: 180000,
+    cost: {},
+    gain: { stone: 10 },
+    conflicts: ['采集食物', '收集淡水', '砍伐木材']
+  },
+  {
+    name: '建造庇护所',
+    icon: '🏠',
+    description: '建造一个安全的住所',
+    duration: 300000,
+    cost: { wood: 50, stone: 30 },
+    gain: {},
+    conflicts: []
+  },
+  {
+    name: '制作工具',
+    icon: '🔨',
+    description: '制作更高效的生存工具',
+    duration: 120000,
+    cost: { wood: 20, stone: 10 },
+    gain: {},
+    conflicts: []
+  }
+];
+
 const addMessage = (content) => {
   const now = new Date();
   const time = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
   messageLog.value.push({ time, content });
-  // 只保留最近20条日志
   if (messageLog.value.length > 20) {
     messageLog.value.shift();
   }
 };
 
-const performAction = (name, cost, gain, time) => {
-  // 检查资源是否足够
-  for (const [resource, amount] of Object.entries(cost)) {
-    if (resources.value[resource] < amount) {
-      ElMessage.error(`资源不足，无法${name}`);
-      return false;
-    }
+const formatDuration = (ms) => {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes > 0) {
+    return `${minutes}分${remainingSeconds}秒`;
   }
-  
-  // 消耗资源
-  for (const [resource, amount] of Object.entries(cost)) {
-    resources.value[resource] -= amount;
+  return `${remainingSeconds}秒`;
+};
+
+const formatResources = (res) => {
+  const names = {
+    food: '食物',
+    water: '淡水',
+    wood: '木材',
+    stone: '石头'
+  };
+  return Object.entries(res)
+    .map(([k, v]) => `${v}${names[k] || k}`)
+    .join('、');
+};
+
+const getActionStatus = (action) => {
+  const check = taskStore.canAddTask(action);
+  const hasConflict = check.reason?.includes('冲突');
+  return {
+    canPerform: check.canAdd,
+    reason: check.reason,
+    hasConflict: !!hasConflict
+  };
+};
+
+const isActionRunning = (name) => {
+  return taskStore.currentTask?.name === name;
+};
+
+const isActionQueued = (name) => {
+  return taskStore.queuedTasks.some(t => t.name === name);
+};
+
+const getQueuePosition = (name) => {
+  const task = taskStore.queuedTasks.find(t => t.name === name);
+  return task?.queuePosition || '-';
+};
+
+const performAction = (action) => {
+  const status = getActionStatus(action);
+  if (!status.canPerform) {
+    ElMessage.error(status.reason);
+    return;
   }
-  
-  addMessage(`开始${name}...`);
-  
-  // 模拟耗时
-  setTimeout(() => {
-    // 获得资源
-    for (const [resource, amount] of Object.entries(gain)) {
-      resources.value[resource] += amount;
-    }
-    addMessage(`${name}完成！获得了${Object.entries(gain).map(([k, v]) => `${v}${k}`).join('、')}`);
-    ElMessage.success(`${name}完成！`);
-  }, time);
-  
-  return true;
-};
 
-const gatherFood = () => {
-  performAction('采集食物', {}, { food: 20 }, 30000);
-};
-
-const collectWater = () => {
-  performAction('收集淡水', {}, { water: 30 }, 60000);
-};
-
-const chopWood = () => {
-  performAction('砍伐木材', {}, { wood: 15 }, 120000);
-};
-
-const mineStone = () => {
-  performAction('挖掘石头', {}, { stone: 10 }, 180000);
-};
-
-const buildShelter = () => {
-  if (performAction('建造庇护所', { wood: 50, stone: 30 }, {}, 300000)) {
-    addMessage('庇护所建造完成！你现在有了一个安全的住所。');
+  const task = taskStore.addTask(action);
+  if (task && action.name === '建造庇护所') {
+    setTimeout(() => {
+      if (taskStore.completedTasks.some(t => t.id === task.id)) {
+        addMessage('庇护所建造完成！你现在有了一个安全的住所。');
+      }
+    }, action.duration + 100);
   }
-};
-
-const craftTools = () => {
-  if (performAction('制作工具', { wood: 20, stone: 10 }, {}, 120000)) {
-    addMessage('工具制作完成！你的工作效率提高了。');
+  if (task && action.name === '制作工具') {
+    setTimeout(() => {
+      if (taskStore.completedTasks.some(t => t.id === task.id)) {
+        addMessage('工具制作完成！你的工作效率提高了。');
+      }
+    }, action.duration + 100);
   }
 };
 
@@ -232,9 +304,25 @@ const exploreCell = (index) => {
     ElMessage.info('这个区域已经探索过了');
     return;
   }
-  
+
+  const exploreAction = {
+    name: `探索${cell.icon}区域`,
+    icon: cell.icon,
+    description: '探索未知区域，可能遇到危险或发现资源',
+    duration: 5000,
+    cost: { food: 5, water: 5 },
+    gain: {},
+    conflicts: []
+  };
+
+  const status = taskStore.canAddTask(exploreAction);
+  if (!status.canPerform) {
+    ElMessage.error(status.reason);
+    return;
+  }
+
   ElMessageBox.confirm(
-    `确定要探索这个区域吗？可能会遇到危险或发现资源。`,
+    `确定要探索这个区域吗？需要消耗5食物和5水，可能会遇到危险或发现资源。`,
     '探索未知区域',
     {
       confirmButtonText: '开始探索',
@@ -242,47 +330,75 @@ const exploreCell = (index) => {
       type: 'warning'
     }
   ).then(() => {
-    addMessage(`开始探索${cell.icon}区域...`);
-    
-    setTimeout(() => {
-      cell.explored = true;
-      
-      // 随机事件
-      const random = Math.random();
-      if (random < 0.3) {
-        const foodGain = Math.floor(Math.random() * 20) + 10;
-        resources.value.food += foodGain;
-        addMessage(`探索发现了食物！获得${foodGain}食物`);
-        ElMessage.success(`探索发现了食物！获得${foodGain}食物`);
-      } else if (random < 0.6) {
-        const woodGain = Math.floor(Math.random() * 15) + 5;
-        resources.value.wood += woodGain;
-        addMessage(`探索发现了木材！获得${woodGain}木材`);
-        ElMessage.success(`探索发现了木材！获得${woodGain}木材`);
-      } else if (random < 0.8) {
-        const stoneGain = Math.floor(Math.random() * 10) + 5;
-        resources.value.stone += stoneGain;
-        addMessage(`探索发现了石头！获得${stoneGain}石头`);
-        ElMessage.success(`探索发现了石头！获得${stoneGain}石头`);
-      } else {
-        resources.value.food -= 10;
-        resources.value.water -= 10;
-        addMessage(`探索遇到了危险！损失了10食物和10水`);
-        ElMessage.warning(`探索遇到了危险！损失了10食物和10水`);
-      }
-    }, 5000);
+    const task = taskStore.addTask(exploreAction);
+    if (task) {
+      const originalComplete = taskStore.onTaskComplete;
+      taskStore.setCallbacks({
+        ...taskStore,
+        onTaskComplete: (completedTask, res) => {
+          if (completedTask.id === task.id) {
+            cell.explored = true;
+            const random = Math.random();
+            if (random < 0.3) {
+              const foodGain = Math.floor(Math.random() * 20) + 10;
+              resources.value.food += foodGain;
+              taskStore.updateResources(resources.value);
+              addMessage(`探索发现了食物！获得${foodGain}食物`);
+              ElMessage.success(`探索发现了食物！获得${foodGain}食物`);
+            } else if (random < 0.6) {
+              const woodGain = Math.floor(Math.random() * 15) + 5;
+              resources.value.wood += woodGain;
+              taskStore.updateResources(resources.value);
+              addMessage(`探索发现了木材！获得${woodGain}木材`);
+              ElMessage.success(`探索发现了木材！获得${woodGain}木材`);
+            } else if (random < 0.8) {
+              const stoneGain = Math.floor(Math.random() * 10) + 5;
+              resources.value.stone += stoneGain;
+              taskStore.updateResources(resources.value);
+              addMessage(`探索发现了石头！获得${stoneGain}石头`);
+              ElMessage.success(`探索发现了石头！获得${stoneGain}石头`);
+            } else {
+              resources.value.food -= 10;
+              resources.value.water -= 10;
+              taskStore.updateResources(resources.value);
+              addMessage(`探索遇到了危险！损失了10食物和10水`);
+              ElMessage.warning(`探索遇到了危险！损失了10食物和10水`);
+            }
+          }
+          if (originalComplete) {
+            originalComplete(completedTask, res);
+          }
+        }
+      });
+    }
   }).catch(() => {
     addMessage('取消了探索');
   });
 };
 
+let resourceTimer = null;
+
 onMounted(() => {
+  taskStore.setResources(resources.value);
+  taskStore.setCallbacks({
+    onTaskComplete: (task, res) => {
+      resources.value = { ...res };
+    },
+    onResourcesUpdate: (res) => {
+      resources.value = { ...res };
+    },
+    onMessageAdd: (content) => {
+      addMessage(content);
+    }
+  });
+
   addMessage('欢迎来到海岛生存游戏！');
-  // 定期消耗资源
-  setInterval(() => {
+
+  resourceTimer = setInterval(() => {
     resources.value.food -= 5;
     resources.value.water -= 5;
-    
+    taskStore.updateResources(resources.value);
+
     if (resources.value.food <= 0 || resources.value.water <= 0) {
       ElMessageBox.alert(
         '你的食物或水耗尽了，游戏结束！',
@@ -292,14 +408,20 @@ onMounted(() => {
           type: 'error'
         }
       ).then(() => {
-        resources.value.food = 100;
-        resources.value.water = 100;
-        resources.value.wood = 100;
-        resources.value.stone = 100;
+        taskStore.reset();
+        resources.value = { food: 100, water: 100, wood: 100, stone: 100 };
+        taskStore.setResources(resources.value);
         addMessage('重新开始游戏！');
       });
     }
-  }, 60000); // 每分钟消耗一次
+  }, 60000);
+});
+
+onUnmounted(() => {
+  if (resourceTimer) {
+    clearInterval(resourceTimer);
+  }
+  taskStore.stopClock();
 });
 </script>
 
@@ -423,10 +545,65 @@ onMounted(() => {
   margin-bottom: 8px;
 }
 
+.task-clock-section {
+  max-width: 1200px;
+  margin: 0 auto 30px;
+}
+
 .action-time,
-.action-cost {
+.action-cost,
+.action-gain,
+.action-conflict-info {
   font-size: 12px;
   color: #999;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.action-gain {
+  color: #67c23a;
+}
+
+.action-conflict-info {
+  color: #f56c6c;
+}
+
+.action-status-badge {
+  margin-top: 8px;
+}
+
+.action-card.action-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.action-card.action-disabled:hover {
+  transform: none;
+  box-shadow: none;
+  border-color: transparent;
+}
+
+.action-card.action-conflict {
+  border-color: #f56c6c;
+  background: #fef0f0;
+}
+
+.action-card.action-running {
+  border-color: #409eff;
+  background: #ecf5ff;
+  animation: running-pulse 2s infinite;
+}
+
+.action-card.action-queued {
+  border-color: #e6a23c;
+  background: #fdf6ec;
+}
+
+@keyframes running-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(64, 158, 255, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(64, 158, 255, 0); }
 }
 
 .map-panel {
